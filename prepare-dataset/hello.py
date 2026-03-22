@@ -106,7 +106,8 @@ def generate_questions(topic: str, num_questions: int, prompt: str) -> str:
     return response
 
 
-print(generate_questions("all mercedes benz car brands and models",1, questions_promt))
+#print(generate_questions("all mercedes benz car brands and models",1, questions_promt))
+print(client.invoke("which llm model are you?"))
 # def generate_dataset(
 #     topic: str,
 # ) -> str:
