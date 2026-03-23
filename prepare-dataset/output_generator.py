@@ -108,17 +108,13 @@ def main():
         verification_mode="no_checks",
     )
 
-    updated_dataset = generate_generations(dataset, output_promt)
-
-    # Correct way to peek at data
-    print(updated_dataset.select(range(5)).to_pandas())
+    updated_dataset = generate_generations(dataset.select(range(2)), output_promt)
 
     # Push to Hub
     updated_dataset.push_to_hub(
         os.getenv("HF_DATASET"),
         token=os.getenv("HF_API_KEY"),
         split="train",
-        verification_mode="no_checks",
     )
 
 
