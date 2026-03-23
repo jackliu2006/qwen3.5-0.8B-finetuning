@@ -39,57 +39,80 @@ you only need to put the generated output in the response as {generation} withou
 
 def generate_generations(dataset, prompt):
     def process_record(record):
-        # Initialize empty results
-        gpt_res = None
-        gemini_res = None
+        # 1. Get existing data (use .get to avoid KeyError)
+        instruction = record.get("instruction", "")
+        gpt_res = record.get("gpt_output")
+        gemini_res = record.get("gemini_output")
 
-        # Only generate if there is an instruction
-        if record.get("instruction") and record["instruction"].strip() != "" and not record.get("generation"):
+        # Skip entirely if instruction is garbage
+        if not instruction or instruction.strip() == "":
+            return {"gpt_output": gpt_res, "gemini_output": gemini_res}
 
-            # 1. GPT-5 Generation
+        # 2. GPT-5 Generation (Only if missing)
+        if not gpt_res or gpt_res.strip() == "":
             try:
+                print(
+                    f"Generating for instruction: {instruction[:50]}..."
+                )  # Log the instruction being processed
                 resp_gpt = gpt.invoke(
                     [
                         SystemMessage(content=prompt),
-                        HumanMessage(content=f"instruction:{record['instruction']}"),
+                        HumanMessage(content=f"instruction:{instruction}"),
                     ]
                 )
                 gpt_res = resp_gpt.content.strip()
+                print(
+                    f"GPT Generation successful for instruction: {instruction[:50]}..."
+                )
             except Exception as e:
-                print(f"GPT Error for ID {record.get('instruction')}: {e}")
+                print(f"GPT Error: {e}")
 
-            # 2. Gemini Generation
+        # 3. Gemini Generation (Only if missing)
+        if not gemini_res or gemini_res.strip() == "":
             try:
                 resp_gem = gemini.invoke(
                     [
                         SystemMessage(content=prompt),
-                        HumanMessage(content=f"instruction:{record['instruction']}"),
+                        HumanMessage(content=f"instruction: {instruction}"),
                     ]
                 )
-                gemini_res = resp_gem.content.strip()
-            except Exception as e:
-                print(f"Gemini Error for ID {record.get('instruction')}: {e}")
 
-        # Return a dict with TWO new keys
-        # This creates two separate columns in your HF Dataset
-        print(f"Processed record with instruction: {record.get('instruction')}, GPT output: {gpt_res}, Gemini output: {gemini_res}")
+             
+                if isinstance(resp_gem.content, list):
+                    gemini_res = " ".join(
+                        [str(part) for part in resp_gem.content]
+                    ).strip()
+                else:
+                    gemini_res = str(resp_gem.content).strip()
+            except Exception as e:
+                print(f"Gemini Error: {e}")
+
         return {"gpt_output": gpt_res, "gemini_output": gemini_res}
 
-    # Use .map to transform the entire dataset
     return dataset.map(process_record)
 
 
 def main():
-    dataset = load_dataset(os.getenv("HF_DATASET"), split="train", token=os.getenv("HF_API_KEY"), verification_mode="no_checks")
+    # Loading as a Dataset object (not Dict)
+    dataset = load_dataset(
+        os.getenv("HF_DATASET"),
+        split="train",
+        token=os.getenv("HF_API_KEY"),
+        verification_mode="no_checks",
+    )
 
-    # Capture the result of the function!
     updated_dataset = generate_generations(dataset, output_promt)
-    updated_dataset.show(5)  # Show a few examples to verify the new columns are added correctly
 
-    # Push the NEW version
-    # updated_dataset.push_to_hub(
-    #     os.getenv("HF_DATASET"), token=os.getenv("HF_API_KEY"), split="train"
-    # )
+    # Correct way to peek at data
+    print(updated_dataset.select(range(5)).to_pandas())
+
+    # Push to Hub
+    updated_dataset.push_to_hub(
+        os.getenv("HF_DATASET"),
+        token=os.getenv("HF_API_KEY"),
+        split="train",
+        verification_mode="no_checks",
+    )
 
 
 if __name__ == "__main__":
