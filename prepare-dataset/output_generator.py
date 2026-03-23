@@ -15,6 +15,8 @@ gemini = ChatGoogleGenerativeAI(
     model="gemini-3.1-pro-preview",  # see table above to set the desired model id
     client_options={"api_endpoint": os.getenv("NEXUS_BASE_URL")},
     google_api_key=os.getenv("NEXUS_API_KEY"),  # Use your Nexus API key here
+    max_output_tokens=int(os.getenv("MAX_TOKENS", 2048)),
+    temperature=float(os.getenv("TEMPERATURE", 0.2)),
 )
 
 gpt = AzureChatOpenAI(
@@ -23,8 +25,8 @@ gpt = AzureChatOpenAI(
     api_version="2024-10-21",  # or your api version
     azure_endpoint=os.getenv("NEXUS_BASE_URL"),
     api_key=os.getenv("NEXUS_API_KEY"),
-    # temperature=0,
-    # max_tokens=None,
+    temperature=float(os.getenv("TEMPERATURE", 0.2)),
+    max_tokens=int(os.getenv("MAX_TOKENS", 400)),
     # timeout=None,
     # max_retries=2,
     # other params...
@@ -52,7 +54,7 @@ def generate_generations(dataset, prompt):
         if not gpt_res or gpt_res.strip() == "":
             try:
                 print(
-                    f"Generating for instruction: {instruction[:50]}..."
+                    f"GPT Generating for instruction: {instruction[:50]}..."
                 )  # Log the instruction being processed
                 resp_gpt = gpt.invoke(
                     [
@@ -71,7 +73,7 @@ def generate_generations(dataset, prompt):
         if not gemini_res or gemini_res.strip() == "":
             try:
                 print(
-                    f"Generating for instruction: {instruction[:50]}..."
+                    f"Gemini Generating for instruction: {instruction[:50]}..."
                 )  # Log the instruction being processed
                 resp_gem = gemini.invoke(
                     [
@@ -92,7 +94,7 @@ def generate_generations(dataset, prompt):
             except Exception as e:
                 print(f"Gemini Error: {e}")
 
-        return {"gpt_output": gpt_res, "gemini_output": gemini_res}
+        return {"gpt_output": gpt_res, "gemini_output": gemini_res, "temperature": float(os.getenv("TEMPERATURE", 0.2)), "max_tokens": int(os.getenv("MAX_TOKENS", 400))}
 
     return dataset.map(process_record)
 
