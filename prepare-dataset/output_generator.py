@@ -70,6 +70,9 @@ def generate_generations(dataset, prompt):
         # 3. Gemini Generation (Only if missing)
         if not gemini_res or gemini_res.strip() == "":
             try:
+                print(
+                    f"Generating for instruction: {instruction[:50]}..."
+                )  # Log the instruction being processed
                 resp_gem = gemini.invoke(
                     [
                         SystemMessage(content=prompt),
@@ -77,13 +80,15 @@ def generate_generations(dataset, prompt):
                     ]
                 )
 
-             
                 if isinstance(resp_gem.content, list):
                     gemini_res = " ".join(
                         [str(part) for part in resp_gem.content]
                     ).strip()
                 else:
                     gemini_res = str(resp_gem.content).strip()
+                print(
+                    f"Gemini Generation successful for instruction: {instruction[:50]}..."
+                )
             except Exception as e:
                 print(f"Gemini Error: {e}")
 
