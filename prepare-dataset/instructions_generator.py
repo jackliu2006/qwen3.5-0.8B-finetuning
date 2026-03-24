@@ -113,6 +113,7 @@ def generate_questions(topic: str, target_questions: int, batch_size: int, promp
         """Use Gpt-5 to generate instructions for dataset generation based on the topic."""
         structured_model = gpt.with_structured_output(FineTuningDataset)
         try:
+            print(f"Generating instructions for topic: {topic} using model: {gpt.model}")
             response = structured_model.invoke(
                 [
                     SystemMessage(content=prompt),
@@ -132,6 +133,7 @@ def generate_questions(topic: str, target_questions: int, batch_size: int, promp
         """ Use gemini to generate instructions for dataset generation based on the topic. """
         structured_model = gemini.with_structured_output(FineTuningDataset)
         try:
+            print(f"Generating instructions for topic: {topic} using model: {gemini.model}")
             response = structured_model.invoke(
                 [
                     SystemMessage(content=prompt),

@@ -1,5 +1,14 @@
 import os
+import logging
+import concurrent.futures
 from dotenv import load_dotenv
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -39,23 +48,25 @@ you only need to put the generated output in the response as {generation} withou
 """
 
 
-def generate_generations(dataset, prompt):
+def generate_generations(dataset, prompt, batch_size=10, max_workers=5):
     def process_record(record):
         # 1. Get existing data (use .get to avoid KeyError)
         instruction = record.get("instruction", "")
         gpt_res = record.get("gpt_output")
         gemini_res = record.get("gemini_output")
+        temperature = float(os.getenv("TEMPERATURE", 0.2))
+        max_tokens = int(os.getenv("MAX_TOKENS", 400))
 
         # Skip entirely if instruction is garbage
         if not instruction or instruction.strip() == "":
-            return {"gpt_output": gpt_res, "gemini_output": gemini_res}
+            logger.warning("Skipping record with empty instruction.")
+            return {"gpt_output": gpt_res, "gemini_output": gemini_res,
+                    "temperature": temperature, "max_tokens": max_tokens}
 
         # 2. GPT-5 Generation (Only if missing)
         if not gpt_res or gpt_res.strip() == "":
             try:
-                print(
-                    f"GPT Generating for instruction: {instruction[:50]}..."
-                )  # Log the instruction being processed
+                logger.info("GPT generating for instruction: %.50s...", instruction)
                 resp_gpt = gpt.invoke(
                     [
                         SystemMessage(content=prompt),
@@ -63,18 +74,14 @@ def generate_generations(dataset, prompt):
                     ]
                 )
                 gpt_res = resp_gpt.content.strip()
-                print(
-                    f"GPT Generation successful for instruction: {instruction[:50]}..."
-                )
+                logger.info("GPT generation successful for instruction: %.50s...", instruction)
             except Exception as e:
-                print(f"GPT Error: {e}")
+                logger.error("GPT error for instruction '%.50s...': %s", instruction, e)
 
         # 3. Gemini Generation (Only if missing)
         if not gemini_res or gemini_res.strip() == "":
             try:
-                print(
-                    f"Gemini Generating for instruction: {instruction[:50]}..."
-                )  # Log the instruction being processed
+                logger.info("Gemini generating for instruction: %.50s...", instruction)
                 resp_gem = gemini.invoke(
                     [
                         SystemMessage(content=prompt),
@@ -88,15 +95,33 @@ def generate_generations(dataset, prompt):
                     ).strip()
                 else:
                     gemini_res = str(resp_gem.content).strip()
-                print(
-                    f"Gemini Generation successful for instruction: {instruction[:50]}..."
-                )
+                logger.info("Gemini generation successful for instruction: %.50s...", instruction)
             except Exception as e:
-                print(f"Gemini Error: {e}")
+                logger.error("Gemini error for instruction '%.50s...': %s", instruction, e)
 
-        return {"gpt_output": gpt_res, "gemini_output": gemini_res, "temperature": float(os.getenv("TEMPERATURE", 0.2)), "max_tokens": int(os.getenv("MAX_TOKENS", 400))}
+        return {"gpt_output": gpt_res, "gemini_output": gemini_res,
+                "temperature": temperature, "max_tokens": max_tokens}
 
-    return dataset.map(process_record)
+    def process_batch(batch):
+        keys = list(batch.keys())
+        n = len(batch[keys[0]])
+        records = [{k: batch[k][i] for k in keys} for i in range(n)]
+
+        logger.info("Processing batch of %d records with %d workers.", n, max_workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(process_record, records))
+
+        gpt_done = sum(1 for r in results if r.get("gpt_output"))
+        gemini_done = sum(1 for r in results if r.get("gemini_output"))
+        logger.info(
+            "Batch complete — GPT outputs: %d/%d, Gemini outputs: %d/%d.",
+            gpt_done, n, gemini_done, n,
+        )
+
+        # Collate individual record dicts back into a batch dict
+        return {k: [r[k] for r in results] for k in results[0]}
+
+    return dataset.map(process_batch, batched=True, batch_size=batch_size)
 
 
 def main():
@@ -108,7 +133,7 @@ def main():
         verification_mode="no_checks",
     )
 
-    updated_dataset = generate_generations(dataset.select(range(2)), output_promt)
+    updated_dataset = generate_generations(dataset, output_promt)
 
     # Push to Hub
     updated_dataset.push_to_hub(
