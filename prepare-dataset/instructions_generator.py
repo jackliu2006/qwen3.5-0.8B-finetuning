@@ -8,6 +8,7 @@ from langchain_openai import AzureChatOpenAI
 from datasets import Dataset
 from huggingface_hub import HfApi
 
+import time
 import uuid
 from pydantic import BaseModel, Field
 from typing import List
@@ -63,6 +64,7 @@ Scope of dataset:
 """
 
 questions_promt = """ you are data engineer to prepare dataset for llm model fine tuning. 
+your generated instruction should aims to get the model generate output of the instruction within {MAX_TOKENS} tokens. The limitation of the output should not be in the generated instruction.
 you only put topic, model and instruction into the response, no other information is needed. 
 you need to generate instructions for the dataset generation based on the {topic} which human message mentioned.
 you need to generate number of {batch_size} detailed and specific instructions based on the {topic}.
@@ -83,10 +85,11 @@ class FineTuningRecord(BaseModel):
         ...,
         description="Instruction for the model to generate a specific part of the dataset.'",
     )
-    generation: str | None = Field(
-        default=None,
-        description="Generation is the expected output from the model when given the instruction.",
+    temperature: float = Field(
+        ...,
+        description="The temperature setting used for generation, which controls the randomness of the output.",
     )
+
 
 
 class FineTuningDataset(BaseModel):
@@ -113,17 +116,19 @@ def generate_questions(topic: str, target_questions: int, batch_size: int, promp
         """Use Gpt-5 to generate instructions for dataset generation based on the topic."""
         structured_model = gpt.with_structured_output(FineTuningDataset)
         try:
-            print(f"Generating instructions for topic: {topic} using model: {gpt.model}")
+            print(f"[{gpt.model}] Sending request for topic: {topic}...")
+            t0 = time.perf_counter()
             response = structured_model.invoke(
                 [
                     SystemMessage(content=prompt),
                     HumanMessage(
-                        content=f"batch_size:{batch_size} , topic:{topic}, model:{gpt.model}"
+                        content=f"batch_size:{batch_size} , topic:{topic}, model:{gpt.model}, max_tokens:{os.getenv('MAX_TOKENS', 400)}, temperature:{os.getenv('TEMPERATURE', 0.2)}"
                     ),
                 ]
             )
+            elapsed = time.perf_counter() - t0
             print(
-                f"Generated {len(response.records)} instructions for topic: {topic} using model: {gpt.model}"
+                f"[{gpt.model}] Received {len(response.records)} records in {elapsed:.2f}s"
             )
             dataset.extend(response.records)
         except Exception as e:
@@ -133,17 +138,19 @@ def generate_questions(topic: str, target_questions: int, batch_size: int, promp
         """ Use gemini to generate instructions for dataset generation based on the topic. """
         structured_model = gemini.with_structured_output(FineTuningDataset)
         try:
-            print(f"Generating instructions for topic: {topic} using model: {gemini.model}")
+            print(f"[{gemini.model}] Sending request for topic: {topic}...")
+            t0 = time.perf_counter()
             response = structured_model.invoke(
                 [
                     SystemMessage(content=prompt),
                     HumanMessage(
-                        content=f"batch_size:{batch_size} , topic:{topic}, model:{gemini.model}"
+                        content=f"batch_size:{batch_size} , topic:{topic}, model:{gemini.model}, max_tokens:{os.getenv('MAX_TOKENS', 400)}, temperature:{os.getenv('TEMPERATURE', 0.2)}"
                     ),
                 ]
             )
+            elapsed = time.perf_counter() - t0
             print(
-                f"Generated {len(response.records)} instructions for topic: {topic} using model: {gemini.model}"
+                f"[{gemini.model}] Received {len(response.records)} records in {elapsed:.2f}s"
             )
             dataset.extend(response.records)
         except Exception as e:
