@@ -15,6 +15,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import AzureChatOpenAI
 
 from datasets import load_dataset
+from huggingface_hub import HfApi
 
 load_dotenv()
 
@@ -48,7 +49,7 @@ you only need to put the generated output in the response as {generation} withou
 """
 
 
-def generate_generations(dataset, prompt, batch_size=10, max_workers=5):
+def generate_generations(dataset, prompt, batch_size=10, max_workers=5, repo_id=None, token=None):
     def process_record(record):
         # 1. Get existing data (use .get to avoid KeyError)
         instruction = record.get("instruction", "")
@@ -121,26 +122,96 @@ def generate_generations(dataset, prompt, batch_size=10, max_workers=5):
         # Collate individual record dicts back into a batch dict
         return {k: [r[k] for r in results] for k in results[0]}
 
-    return dataset.map(process_batch, batched=True, batch_size=batch_size)
+    import tempfile
+    from datasets import concatenate_datasets
+
+    api = HfApi()
+    total = len(dataset)
+    processed_batches = []
+    for start in range(0, total, batch_size):
+        end = min(start + batch_size, total)
+        logger.info("Processing records %d–%d of %d...", start + 1, end, total)
+        batch_ds = dataset.select(range(start, end))
+        try:
+            processed = batch_ds.map(process_batch, batched=True, batch_size=len(batch_ds))
+            processed_batches.append(processed)
+            if repo_id and token:
+                # Upload only this batch shard — O(batch_size), not O(total)
+                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+                    tmp_path = tmp.name
+                processed.to_parquet(tmp_path)
+                shard_name = f"generated/batch-{start:07d}-{end:07d}.parquet"
+                api.upload_file(
+                    path_or_fileobj=tmp_path,
+                    path_in_repo=shard_name,
+                    repo_id=repo_id,
+                    token=token,
+                    repo_type="dataset",
+                )
+                logger.info("Uploaded shard %s (%d records).", shard_name, end - start)
+        except Exception as e:
+            logger.error("Batch %d–%d failed: %s. Skipping.", start + 1, end, e)
+
+    return concatenate_datasets(processed_batches)
 
 
 def main():
+    repo_id = os.getenv("HF_DATASET")
+    token = os.getenv("HF_API_KEY")
+    api = HfApi()
+
     # Loading as a Dataset object (not Dict)
     dataset = load_dataset(
-        os.getenv("HF_DATASET"),
+        repo_id,
         split="train",
-        token=os.getenv("HF_API_KEY"),
+        token=token,
         verification_mode="no_checks",
     )
 
-    updated_dataset = generate_generations(dataset, output_promt)
+    # Resume: find already-uploaded shards and skip those records
+    try:
+        repo_files = api.list_repo_files(repo_id=repo_id, token=token, repo_type="dataset")
+        shard_files = sorted(f for f in repo_files if f.startswith("generated/batch-"))
+    except Exception:
+        shard_files = []
 
-    # Push to Hub
-    updated_dataset.push_to_hub(
-        os.getenv("HF_DATASET"),
-        token=os.getenv("HF_API_KEY"),
-        split="train",
+    start_offset = 0
+    completed_batches = []
+    if shard_files:
+        logger.info("Found %d existing shards, resuming...", len(shard_files))
+        existing = load_dataset(
+            repo_id,
+            data_files=shard_files,
+            split="train",
+            token=token,
+            verification_mode="no_checks",
+        )
+        completed_batches.append(existing)
+        start_offset = len(existing)
+        logger.info("Skipping first %d already-processed records.", start_offset)
+
+    dataset = dataset.select(range(start_offset, len(dataset)))
+
+    updated_dataset = generate_generations(
+        dataset,
+        output_promt,
+        repo_id=repo_id,
+        token=token,
     )
+
+    if completed_batches:
+        from datasets import concatenate_datasets
+        updated_dataset = concatenate_datasets(completed_batches + [updated_dataset])
+
+    # Final push: consolidates everything into the train split
+    logger.info("Pushing %d records to HF Hub as train split...", len(updated_dataset))
+    updated_dataset.push_to_hub(repo_id, token=token, split="train")
+
+    # Clean up the intermediate shards from generated/
+    for shard in api.list_repo_files(repo_id=repo_id, token=token, repo_type="dataset"):
+        if shard.startswith("generated/batch-"):
+            api.delete_file(path_in_repo=shard, repo_id=repo_id, token=token, repo_type="dataset")
+            logger.info("Deleted shard %s.", shard)
 
 
 if __name__ == "__main__":
