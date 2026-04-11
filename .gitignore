@@ -1,3 +1,7 @@
 .env
 new_data.parquet
 test/__pycache__/datasets.cpython-313.pyc
+Qwen_Qwen3-0.6B_car_knowledge_finetuned_gpt5/*
+Qwen_Qwen3-0.6B_car_knowledge_finetuned_gpt5/vocab.json
+Qwen3.5_0.8B_car_knowledge_finetuned_gpt5/*
+Qwen_Qwen3-0.6B_car_knowledge_finetuned_gemini3/**
