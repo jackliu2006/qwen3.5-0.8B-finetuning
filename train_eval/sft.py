@@ -26,12 +26,39 @@ SOURCE_COLUMNS = {
 
 
 def get_output_dir(source_suffix: str) -> str:
-    return f"{MODEL_NAME.replace('/', '_')}_car_knowledge_finetuned_{source_suffix}"
+    return f"{MODEL_NAME.replace('/', '_').replace('-', '_').replace('.', '')}_car_knowledge_finetuned_{source_suffix}"
+
+
+def is_model_registered(registered_model_name: str) -> bool:
+    """Return True if at least one version of the model exists in the registry."""
+    client = mlflow.MlflowClient()
+    try:
+        versions = client.search_model_versions(f"name='{registered_model_name}'")
+        return len(versions) > 0
+    except Exception:
+        return False
+
+
+def register_local_model(output_dir: str, source_suffix: str) -> None:
+    """Load the local LoRA model, log it to MLflow, and register it."""
+    print(f"Registering local model '{output_dir}' in Databricks…")
+    model, tokenizer = load_model_and_tokenizer(use_quantization=False)
+    from peft import PeftModel
+    peft_model = PeftModel.from_pretrained(model, output_dir)
+    merged_model = peft_model.merge_and_unload()
+    run_name = f"{MODEL_NAME.replace('/', '_')}_{source_suffix}_register"
+    with mlflow.start_run(run_name=run_name):
+        mlflow.transformers.log_model(
+            transformers_model={"model": merged_model, "tokenizer": tokenizer},
+            name=output_dir,
+            registered_model_name=get_registered_model_name(source_suffix),
+        )
+    print(f"Model registered as '{get_registered_model_name(source_suffix)}'.")
 
 
 def get_registered_model_name(source_suffix: str) -> str:
     registry_uri = os.environ.get("MLFLOW_REGISTRY_URI", "databricks")
-    model_name = f"{MODEL_NAME.replace('/', '-')}_{source_suffix}"
+    model_name = f"{MODEL_NAME.replace('/', '_').replace('-', '_').replace('.', '')}_{source_suffix}"
     if registry_uri == "databricks-uc":
         catalog = os.environ["MLFLOW_UC_CATALOG"]
         schema = os.environ["MLFLOW_UC_SCHEMA"]
@@ -151,10 +178,19 @@ def train_one(source_column: str, source_suffix: str) -> None:
     print(f"Training with source column: {source_column}")
     print(f"{'='*60}")
 
+    output_dir = get_output_dir(source_suffix)
+    if os.path.isfile(os.path.join(output_dir, "adapter_model.safetensors")):
+        print(f"Found existing model at '{output_dir}', skipping training.")
+        registered_name = get_registered_model_name(source_suffix)
+        if not is_model_registered(registered_name):
+            register_local_model(output_dir, source_suffix)
+        else:
+            print(f"Model '{registered_name}' is already registered, nothing to do.")
+        return
+
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    output_dir = get_output_dir(source_suffix)
     model, tokenizer = load_model_and_tokenizer(use_quantization=False)
     dataset_dict = prepare_dataset(tokenizer, source_column)
     training_args = get_training_args(output_dir)
@@ -203,7 +239,7 @@ def train_one(source_column: str, source_suffix: str) -> None:
         merged_model = trainer.model.merge_and_unload()
         mlflow.transformers.log_model(
             transformers_model={"model": merged_model, "tokenizer": tokenizer},
-            artifact_path="model",
+            name=output_dir,
             registered_model_name=get_registered_model_name(source_suffix),
         )
 
